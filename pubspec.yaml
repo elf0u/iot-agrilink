@@ -1,0 +1,26 @@
+name: iot_agrilink
+description: Station IoT Agricole + Communauté AgriLink
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  mqtt_client: ^10.0.0
+  http: ^1.2.0
+  fl_chart: ^0.68.0
+  image_picker: ^1.0.7
+  tflite_flutter: ^0.12.1
+  image: ^4.1.7
+  ffi: ^2.1.2
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/ml/plant_disease_model.tflite
+    - assets/ml/labels.json
