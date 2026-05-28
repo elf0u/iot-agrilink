@@ -1,0 +1,216 @@
+// ======================
+// LIBS
+// ======================
+#include <heltec_unofficial.h>
+#include "DHT.h"
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// ======================
+// WIFI CONFIG
+// ======================
+const char* ssid     = "HexaByte";
+const char* password = "70698747";
+//const char* ssid     = "ETUD-CH";
+//const char* password = "Etud2025";
+
+
+// ======================
+// MQTT CONFIG
+// ======================
+const char* mqtt_server     = "192.168.1.6";
+//const char* mqtt_server     = "172.16.29.143";
+const int   mqtt_port       = 1883;
+const char* mqtt_topic_temp = "iot/temperature";
+const char* mqtt_topic_hum  = "iot/humidity";
+const char* mqtt_topic_sol  = "iot/sol";
+
+// ======================
+// DHT11 CONFIG
+// ======================
+#define DHTPIN  48
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// ======================
+// LED CONFIG
+// ======================
+#define LED_PIN 26
+#define SEUIL_HUMIDITE_HAUTE    70.0
+#define SEUIL_TEMPERATURE_BASSE 20.0
+
+// ======================
+// CAPTEUR SOL CONFIG
+// ⚠️ CHANGÉ → GPIO2 (plus fiable que 34 sur ESP32-S3)
+// ======================
+#define SOL_PIN 2
+
+// ======================
+// MQTT CLIENT
+// ======================
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+unsigned long lastMsg = 0;
+const long interval = 5000;
+
+// ======================
+// LECTURE SOL (MOYENNE)
+// ======================
+int lireSol() {
+  int total = 0;
+
+  for (int i = 0; i < 10; i++) {
+    total += analogRead(SOL_PIN);
+    delay(10);
+  }
+
+  int raw = total / 10;
+
+  Serial.print("RAW SOL = ");
+  Serial.println(raw);
+
+  return raw;
+}
+
+// ======================
+// WIFI
+// ======================
+void setup_wifi() {
+  display.clear();
+  display.drawString(0, 0, "Connexion WiFi...");
+  display.display();
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("WiFi connecte !");
+  display.clear();
+  display.drawString(0, 0, "WiFi OK");
+  display.drawString(0, 16, WiFi.localIP().toString());
+  display.display();
+  delay(2000);
+}
+
+// ======================
+// MQTT RECONNECT
+// ======================
+void reconnect_mqtt() {
+  while (!client.connected()) {
+    Serial.print("Connexion MQTT...");
+    if (client.connect("HeltecV3")) {
+      Serial.println(" OK !");
+    } else {
+      Serial.print(" Echec, rc=");
+      Serial.print(client.state());
+      Serial.println(" Retry in 5s");
+      delay(5000);
+    }
+  }
+}
+
+// ======================
+// SETUP
+// ======================
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+
+  heltec_setup();
+  dht.begin();
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  pinMode(SOL_PIN, INPUT);
+
+  // 🔥 CONFIG ADC (OBLIGATOIRE ESP32-S3)
+  analogReadResolution(12); // 0–4095
+  analogSetPinAttenuation(SOL_PIN, ADC_11db);
+
+  setup_wifi();
+  client.setServer(mqtt_server, mqtt_port);
+}
+
+// ======================
+// LOOP
+// ======================
+void loop() {
+
+  if (!client.connected()) {
+    reconnect_mqtt();
+  }
+  client.loop();
+
+  unsigned long now = millis();
+
+  if (now - lastMsg > interval) {
+
+    lastMsg = now;
+
+    float t   = dht.readTemperature();
+    float h   = dht.readHumidity();
+    int   sol = lireSol();
+
+    if (isnan(t) || isnan(h)) {
+      Serial.println("Erreur DHT11 !");
+      return;
+    }
+
+    // ================================
+    // LED
+    // ================================
+    if (h > SEUIL_HUMIDITE_HAUTE && t < SEUIL_TEMPERATURE_BASSE) {
+      digitalWrite(LED_PIN, HIGH);
+    } else {
+      digitalWrite(LED_PIN, LOW);
+    }
+
+    // ================================
+    // MQTT
+    // ================================
+    char tempString[8];
+    char humString[8];
+    char solString[8];
+
+    dtostrf(t, 4, 1, tempString);
+    dtostrf(h, 4, 1, humString);
+    snprintf(solString, sizeof(solString), "%d", sol);
+
+    client.publish(mqtt_topic_temp, tempString);
+    client.publish(mqtt_topic_hum,  humString);
+    client.publish(mqtt_topic_sol,  solString);
+
+    // ================================
+    // DEBUG SERIAL
+    // ================================
+    Serial.print("T="); Serial.print(tempString);
+    Serial.print(" C  H="); Serial.print(humString);
+    Serial.print(" %  Sol="); Serial.print(sol);
+    Serial.print("/4095  LED=");
+    Serial.println((h > SEUIL_HUMIDITE_HAUTE && t < SEUIL_TEMPERATURE_BASSE) ? "ON" : "OFF");
+
+    // ================================
+    // OLED
+    // ================================
+    display.clear();
+    display.drawString(0, 0, "MQTT TX");
+
+    char line1[30], line2[30];
+    snprintf(line1, sizeof(line1), "T=%.1fC H=%.1f%%", t, h);
+    snprintf(line2, sizeof(line2), "Sol=%d/4095", sol);
+
+    display.drawString(0, 16, line1);
+    display.drawString(0, 32, line2);
+    display.drawString(0, 48,
+      (h > SEUIL_HUMIDITE_HAUTE && t < SEUIL_TEMPERATURE_BASSE) ? "LED: ON" : "LED: OFF"
+    );
+
+    display.display();
+  }
+}
